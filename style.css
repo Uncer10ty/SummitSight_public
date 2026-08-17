@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard - SummitSight</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏔️</text></svg>">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="logo">
+                <h1>🏔️ SummitSight</h1>
+            </div>
+            <ul class="nav-menu">
+                <li><a href="index.html">Upload</a></li>
+                <li><a href="about.html">About</a></li>
+                <li><a href="gallery.html">Gallery</a></li>
+                <li><a href="admin.html" class="active">Admin</a></li>
+                <li><button id="themeToggle" class="theme-toggle" title="Toggle dark mode">🌙</button></li>
+            </ul>
+        </div>
+    </nav>
+
+    <main class="container">
+        <section class="about-hero">
+            <h2>System Health Dashboard</h2>
+            <p class="subtitle">Real-time status of SummitSight services</p>
+        </section>
+
+        <!-- Quick status cards -->
+        <div class="admin-grid" id="statusCards">
+            <div class="admin-stat-card">
+                <div class="stat-icon">🟢</div>
+                <div class="stat-label">API Status</div>
+                <div class="stat-value" id="apiStatus">-</div>
+            </div>
+            <div class="admin-stat-card">
+                <div class="stat-icon">🧠</div>
+                <div class="stat-label">ML Models</div>
+                <div class="stat-value" id="modelsStatus">-</div>
+            </div>
+            <div class="admin-stat-card">
+                <div class="stat-icon">💾</div>
+                <div class="stat-label">Memory (RSS)</div>
+                <div class="stat-value" id="memoryRss">-</div>
+            </div>
+            <div class="admin-stat-card">
+                <div class="stat-icon">📊</div>
+                <div class="stat-label">Database</div>
+                <div class="stat-value" id="dbSize">-</div>
+            </div>
+            <div class="admin-stat-card">
+                <div class="stat-icon">⏱️</div>
+                <div class="stat-label">Uptime</div>
+                <div class="stat-value" id="uptime">-</div>
+            </div>
+            <div class="admin-stat-card">
+                <div class="stat-icon">🔄</div>
+                <div class="stat-label">Active Jobs</div>
+                <div class="stat-value" id="activeJobs">-</div>
+            </div>
+        </div>
+
+        <!-- Detailed system info -->
+        <div class="admin-section">
+            <h3>System Details</h3>
+            <table class="admin-table">
+                <tbody>
+                    <tr><th>Node.js API</th><td id="nodeStatus">-</td></tr>
+                    <tr><th>Python API</th><td id="pythonStatus">-</td></tr>
+                    <tr><th>Models Loaded</th><td id="modelsDetail">-</td></tr>
+                    <tr><th>Data Loaded</th><td id="dataDetail">-</td></tr>
+                    <tr><th>Memory RSS</th><td id="memRssDetail">-</td></tr>
+                    <tr><th>Memory VMS</th><td id="memVmsDetail">-</td></tr>
+                    <tr><th>CPU Usage</th><td id="cpuDetail">-</td></tr>
+                    <tr><th>Threads</th><td id="threadsDetail">-</td></tr>
+                    <tr><th>PID</th><td id="pidDetail">-</td></tr>
+                    <tr><th>Database Size</th><td id="dbSizeDetail">-</td></tr>
+                    <tr><th>Active Sessions</th><td id="sessionsDetail">-</td></tr>
+                    <tr><th>Extract Queue</th><td id="extractQueue">-</td></tr>
+                    <tr><th>Search Queue</th><td id="searchQueue">-</td></tr>
+                    <tr><th>Uptime</th><td id="uptimeDetail">-</td></tr>
+                    <tr><th>Last Refresh</th><td id="lastRefresh">-</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <p class="admin-refresh-info">Auto-refreshes every 5 seconds &nbsp;|&nbsp; <button class="btn btn-secondary" style="padding:0.4rem 1rem; font-size:0.85rem;" onclick="fetchHealth()">Refresh Now</button></p>
+    </main>
+
+    <footer class="footer">
+        <p>&copy; 2026 SummitSight. All rights reserved.</p>
+    </footer>
+
+    <script src="js/theme.js"></script>
+    <script src="js/config.js"></script>
+    <script src="js/admin.js"></script>
+    <script>
+        window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
+    </script>
+    <script defer src="/_vercel/insights/script.js"></script>
+</body>
+</html>

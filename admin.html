@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>About - SummitSight</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏔️</text></svg>">
+    <!-- Leaflet CSS for coverage map -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin="" />
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="logo">
+                <h1>🏔️ SummitSight</h1>
+            </div>
+            <ul class="nav-menu">
+                <li><a href="index.html">Upload</a></li>
+                <li><a href="about.html" class="active">About</a></li>
+                <li><a href="gallery.html">Gallery</a></li>
+                <li><button id="themeToggle" class="theme-toggle" title="Toggle dark mode">🌙</button></li>
+            </ul>
+        </div>
+    </nav>
+
+    <main class="container">
+        <section class="about-hero">
+            <h2>About SummitSight</h2>
+            <p class="subtitle">Advanced Geolocation Through Skyline Analysis</p>
+        </section>
+
+        <section class="about-content">
+            <div class="content-block">
+                <h3>What is SummitSight?</h3>
+                <p>SummitSight is an innovative geolocation tool that uses advanced computer vision and contour analysis to identify locations based on skyline images. By analysing the unique "fingerprint" of mountain ridges and horizons, we can match your uploaded images to known geographical locations in our database.</p>
+            </div>
+
+            <!-- Pipeline walkthrough animation -->
+            <div class="content-block" id="pipelineBlock">
+                <h3>How It Works - Pipeline Walkthrough</h3>
+                <p>Your image goes through a multi-stage processing pipeline:</p>
+                <div class="pipeline-steps" id="pipelineSteps">
+                    <div class="pipeline-step" data-delay="0">
+                        <div class="pipeline-step-icon">📸</div>
+                        <span class="pipeline-step-label">Upload</span>
+                        <span class="pipeline-step-desc">Your mountain photo</span>
+                    </div>
+                    <span class="pipeline-arrow" data-delay="200">→</span>
+                    <div class="pipeline-step" data-delay="400">
+                        <div class="pipeline-step-icon">🧠</div>
+                        <span class="pipeline-step-label">Segmentation</span>
+                        <span class="pipeline-step-desc">SegFormer AI</span>
+                    </div>
+                    <span class="pipeline-arrow" data-delay="600">→</span>
+                    <div class="pipeline-step" data-delay="800">
+                        <div class="pipeline-step-icon">📈</div>
+                        <span class="pipeline-step-label">Curve Extraction</span>
+                        <span class="pipeline-step-desc">Sky–terrain boundary</span>
+                    </div>
+                    <span class="pipeline-arrow" data-delay="1000">→</span>
+                    <div class="pipeline-step" data-delay="1200">
+                        <div class="pipeline-step-icon">📊</div>
+                        <span class="pipeline-step-label">FFT Search</span>
+                        <span class="pipeline-step-desc">1.35M fingerprints</span>
+                    </div>
+                    <span class="pipeline-arrow" data-delay="1400">→</span>
+                    <div class="pipeline-step" data-delay="1600">
+                        <div class="pipeline-step-icon">🎯</div>
+                        <span class="pipeline-step-label">Refinement</span>
+                        <span class="pipeline-step-desc">KD-tree + scoring</span>
+                    </div>
+                    <span class="pipeline-arrow" data-delay="1800">→</span>
+                    <div class="pipeline-step" data-delay="2000">
+                        <div class="pipeline-step-icon">📍</div>
+                        <span class="pipeline-step-label">Results</span>
+                        <span class="pipeline-step-desc">Top-5 locations</span>
+                    </div>
+                </div>
+                <ul class="feature-list" style="margin-top:1rem;">
+                    <li><strong>Segmentation:</strong> SegFormer extracts a sky mask from the photo using semantic segmentation</li>
+                    <li><strong>Curve Extraction:</strong> The sky–terrain boundary is traced as a 1-D elevation profile</li>
+                    <li><strong>FFT Coarse Search:</strong> Fast Fourier Transform cross-correlation scans 1.35 million pre-computed skyline fingerprints in ~14 chunks</li>
+                    <li><strong>KD-Tree Refinement:</strong> The top coarse matches are geographically clustered, then re-scored with NCC, Chamfer distance, RMSE and elevation weighting</li>
+                    <li><strong>Final Ranking:</strong> Composite confidence score combines all metrics to produce ranked candidates</li>
+                </ul>
+            </div>
+
+            <div class="content-block confidence-breakdown">
+                <h3>How Confidence Is Calculated</h3>
+                <p>
+                    Each candidate receives a confidence score from four factors. We normalize each metric, apply fixed weights,
+                    then combine them into a final score out of 100.
+                </p>
+                <div class="confidence-grid">
+                    <div class="confidence-factor">
+                        <h4>45% - NCC</h4>
+                        <p>Normalised cross-correlation captures skyline shape similarity between your query and database profile.</p>
+                    </div>
+                    <div class="confidence-factor">
+                        <h4>25% - Chamfer</h4>
+                        <p>Asymmetric Chamfer distance measures geometric closeness of the skyline boundary, robust to clutter.</p>
+                    </div>
+                    <div class="confidence-factor">
+                        <h4>15% - RMSE</h4>
+                        <p>Root mean square error penalizes profile mismatch in elevation angle across the aligned segment.</p>
+                    </div>
+                    <div class="confidence-factor">
+                        <h4>15% - Elevation Profile</h4>
+                        <p>Elevation-profile scoring checks whether terrain structure and ridge variation are physically plausible.</p>
+                    </div>
+                </div>
+                <p class="confidence-formula">
+                    Confidence = 100 x (0.45 x NCC + 0.25 x Chamfer + 0.15 x RMSE + 0.15 x Elevation)
+                </p>
+            </div>
+
+            <div class="content-block">
+                <h3>Technology Stack</h3>
+                <div class="tech-grid">
+                    <div class="tech-card">
+                        <h4>Frontend</h4>
+                        <p>HTML5, CSS3 (dark mode), JavaScript, Leaflet.js maps, Canvas API charts</p>
+                    </div>
+                    <div class="tech-card">
+                        <h4>Backend</h4>
+                        <p>Node.js with Express proxy, Python Flask API for ML inference</p>
+                    </div>
+                    <div class="tech-card">
+                        <h4>AI Models</h4>
+                        <p>SegFormer semantic segmentation model for robust sky masking and skyline extraction</p>
+                    </div>
+                    <div class="tech-card">
+                        <h4>Search Engine</h4>
+                        <p>FFT cross-correlation on 1.35M skylines, KD-tree geographic refinement, NCC+Chamfer scoring</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Example Gallery -->
+            <div class="content-block">
+                <h3>Example Gallery</h3>
+                <p>Click any example to open the interactive gallery page and step through a fast pipeline replay.</p>
+                <div class="example-gallery" id="exampleGallery">
+                    <a class="example-card" href="gallery.html?example=midi-d-ossau">
+                        <img src="examples/midi-d-ossau/input.jpg" alt="Pic du Midi d'Ossau example input image">
+                        <div class="example-info">
+                            <h4>Pic du Midi d'Ossau</h4>
+                            <p>Iconic pyramidal peak - 2,884 m, Béarn, France</p>
+                        </div>
+                    </a>
+                    <a class="example-card" href="gallery.html?example=aneto">
+                        <img src="examples/aneto/input.jpg" alt="Aneto example input image">
+                        <div class="example-info">
+                            <h4>Aneto</h4>
+                            <p>Highest peak in the Pyrenees - 3,404 m, Aragon, Spain</p>
+                        </div>
+                    </a>
+                    <a class="example-card" href="gallery.html?example=canigou">
+                        <img src="examples/canigou/input.jpg" alt="Pic du Canigou example input image">
+                        <div class="example-info">
+                            <h4>Pic du Canigou</h4>
+                            <p>Prominent eastern Pyrenees peak - 2,784 m, Catalonia, France</p>
+                        </div>
+                    </a>
+                </div>
+                <div class="gallery-cta-wrap">
+                    <a href="gallery.html" class="btn btn-primary">Open Interactive Gallery</a>
+                </div>
+            </div>
+
+            <!-- Coverage Map -->
+            <div class="content-block">
+                <h3>Database Coverage</h3>
+                <p>SummitSight's database currently covers the <strong>Pyrenees mountain range</strong> with 1,347,655 viewpoints at 250 m resolution. Coverage is stored in seven uniform tiles shown below:</p>
+                <div class="coverage-map-container" id="coverageMap"></div>
+                <p style="margin-top:0.75rem; font-size:0.85rem; color:var(--text-secondary);">
+                    Coverage tiles: 7 (uniform) &nbsp;|&nbsp; Lat/Lon extent: 42°N – 44°N, 2°W – 3°E &nbsp;|&nbsp; Resolution: 250 m grid
+                </p>
+            </div>
+
+            <div class="content-block">
+                <h3>Use Cases</h3>
+                <div class="use-case-grid">
+                    <div class="use-case">
+                        <div class="use-case-icon">🥾</div>
+                        <h4>Hiking & Outdoor Recreation</h4>
+                        <p>Identify your location when hiking or exploring new terrain</p>
+                    </div>
+                    <div class="use-case">
+                        <div class="use-case-icon">📷</div>
+                        <h4>Photography</h4>
+                        <p>Rediscover where old landscape photos were taken</p>
+                    </div>
+                    <div class="use-case">
+                        <div class="use-case-icon">🔬</div>
+                        <h4>Research</h4>
+                        <p>Geolocation analysis for scientific and academic purposes</p>
+                    </div>
+                    <div class="use-case">
+                        <div class="use-case-icon">🗺️</div>
+                        <h4>Exploration</h4>
+                        <p>Plan trips by identifying interesting mountain ranges</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="content-block">
+                <h3>Tips for Best Results</h3>
+                <ul class="feature-list">
+                    <li>Use clear images with visible skylines or mountain ridges</li>
+                    <li>Avoid images with heavy fog, clouds, or obstructions</li>
+                    <li>Higher resolution images typically provide better results</li>
+                    <li>Images taken during clear weather conditions work best</li>
+                    <li>Ensure the horizon is clearly visible in the photograph</li>
+                </ul>
+            </div>
+
+            <div class="cta-section">
+                <h3>Ready to Try It?</h3>
+                <p>Upload your skyline image and discover your location!</p>
+                <a href="index.html" class="btn btn-primary btn-large">Get Started</a>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <p>&copy; 2026 SummitSight. All rights reserved.</p>
+    </footer>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+            crossorigin=""></script>
+    <script src="js/theme.js"></script>
+    <script src="js/about.js"></script>
+    <script>
+        window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
+    </script>
+    <script defer src="/_vercel/insights/script.js"></script>
+</body>
+</html>

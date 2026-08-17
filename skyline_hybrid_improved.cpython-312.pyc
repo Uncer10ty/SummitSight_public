@@ -1,0 +1,141 @@
+"""
+SummitSight Field-of-View (FOV) Estimation Module
+
+This module provides a multi-level approach to determining the horizontal FOV for query images, 
+which is critical for aligning pixel-space curves with the database.
+
+The estimation framework utilises two distinct methodologies:
+1. Metadata Extraction: 
+Parses image EXIF data to extract the 35mm-equivalent focal length. 
+It then applies standard optical trigonometry to derive the horizontal FOV. 
+If no 35mm equivalent, it tries a fallback calculation using the raw focal length.
+2. Iterative Optimisation: 
+Executes a grid search to refine the FOV post-coarse search. 
+By resampling the query segment and computing the NCC against the reference skyline, 
+it finds the angular width that yields the highest structural agreement.
+"""
+
+import numpy as np
+from typing import Optional, Tuple
+
+DEFAULT_FOV = 65.0          # degrees – good smartphone average
+SENSOR_WIDTH_35MM = 36.0    # mm  (35 mm equivalent sensor width)
+
+
+# ── EXIF-based FOV estimation ────────────────────────────────────────────────
+
+def fov_from_exif(image_path: str) -> Optional[float]:
+    """
+    Attempt to extract the 35 mm-equivalent focal length from EXIF and
+    convert to horizontal FOV.
+
+    Returns None if EXIF is missing or unparseable.
+    """
+    try:
+        from PIL import Image
+        from PIL.ExifTags import TAGS
+
+        img = Image.open(image_path)
+        exif = img._getexif()
+        if exif is None:
+            return None
+
+        # Build tag-name lookup
+        tag_names = {v: k for k, v in TAGS.items()}
+
+        # Prefer FocalLengthIn35mmFilm (tag 41989)
+        focal_35mm = exif.get(tag_names.get("FocalLengthIn35mmFilm"))
+
+        if focal_35mm is None:
+            # Fall back to FocalLength (tag 37386) – this is the *actual*
+            # focal length, not 35 mm-equiv, so only approximate.
+            fl_raw = exif.get(tag_names.get("FocalLength"))
+            if fl_raw is None:
+                return None
+            # fl_raw is often a tuple/IFDRational
+            if hasattr(fl_raw, "numerator"):
+                focal_35mm = float(fl_raw.numerator) / float(fl_raw.denominator)
+            elif isinstance(fl_raw, tuple):
+                focal_35mm = float(fl_raw[0]) / float(fl_raw[1])
+            else:
+                focal_35mm = float(fl_raw)
+
+        focal_35mm = float(focal_35mm)
+        if focal_35mm <= 0:
+            return None
+
+        fov = 2 * np.degrees(np.arctan(SENSOR_WIDTH_35MM / (2 * focal_35mm)))
+        return float(fov)
+
+    except Exception:
+        return None
+
+
+# iterative FOV estimation 
+
+def estimate_fov_iterative(
+    query_segment: np.ndarray,
+    reference_360: np.ndarray,
+    azimuth_offset: int,
+    fov_range: Tuple[float, float] = (50.0, 90.0),
+    step: float = 2.0,
+) -> float:
+    """
+    Estimate the FOV by testing a range of values and picking the one that
+    maximises the NCC between the query and the corresponding reference window.
+
+    Args:
+        query_segment : raw image skyline (pixel space, any length)
+        reference_360 : full 360° reference (720 pts)
+        azimuth_offset : starting offset index (from coarse search)
+        fov_range : (min, max) FOV to test
+        step : step size in degrees
+
+    Returns:
+        Best FOV in degrees
+    """
+    from geo_utils import resample_to_angular
+
+    best_fov = DEFAULT_FOV
+    best_ncc = -np.inf
+
+    for fov in np.arange(fov_range[0], fov_range[1] + step, step):
+        seg_len = int(fov * 2) # 2 pts per degree
+        if seg_len < 4:
+            continue
+
+        # Resample query to this FOV's angular length
+        q = resample_to_angular(query_segment, fov)
+
+        # Extract reference window at the given offset
+        indices = np.arange(azimuth_offset, azimuth_offset + seg_len) % 720
+        ref_win = reference_360[indices].astype(np.float32)
+
+        # NCC
+        q_mean, r_mean = np.mean(q), np.mean(ref_win)
+        q_std,  r_std  = np.std(q),  np.std(ref_win)
+        if q_std < 1e-8 or r_std < 1e-8:
+            continue
+        ncc = float(np.mean((q - q_mean) * (ref_win - r_mean)) / (q_std * r_std))
+
+        if ncc > best_ncc:
+            best_ncc = ncc
+            best_fov = float(fov)
+
+    return best_fov
+
+
+# public entry point 
+
+def get_fov(image_path: Optional[str] = None,
+            fallback: float = DEFAULT_FOV) -> float:
+    """
+    Determine FOV for a query image.
+
+    Tries EXIF first; falls back to the given default if unavailable.
+    """
+    if image_path is not None:
+        exif_fov = fov_from_exif(image_path)
+        if exif_fov is not None:
+            return exif_fov
+    return fallback

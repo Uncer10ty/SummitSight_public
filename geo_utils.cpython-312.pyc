@@ -1,0 +1,418 @@
+"""
+SummitSight Vectorised Coarse Search Engine
+
+Given a partial-FOV query segment (~65°), this module executes the initial high-speed global search, 
+identifying top-k candidates from the database. 
+this by computing the sliding window normalised cross-correlation (NCC) within the frequency domain 
+using the convolution theorem.
+
+Key idea:
+    cross_corr(query, ref) = irfft( rfft(ref) * conj(rfft(query_padded)) )
+    We precomputed rfft(ref) for every skyline, so at query time only
+    one small FFT + chunked element-wise multiply + irfft is needed.
+
+Key computational optimisations:
+1. Frequency Domain Correlation: 
+SciPy's is highly optimised at calculating inverse real Fast Fourier Transform (irfft) 
+we use this to compute spectral products, which reduces the asymptotic complexity by a lot compared to spatial-domain sliding windows.
+2. Fused Parallel Kernels: 
+Employs Numba's Just-In-Time (JIT) to execute single-pass argmax and NCC normalisation across multiple CPU cores,
+better than standard NumPy array allocation 
+3. Memory Chunking: 
+Process the skyline database in 100k chunks to maintain CPU cache efficiency and prevent RAM overload
+4. Spatial Deduplication: 
+Applies a geographic filter to prevent clustered, visually identical terrain features from dominating the top results.
+
+"""
+
+import numpy as np
+import time
+import math
+from typing import List, Dict, Tuple, Optional, Callable
+from scipy.fft import irfft as scipy_irfft
+import numba
+
+from geo_utils import (
+    load_rfft, load_sq_rfft, load_metadata, load_skylines,
+    POINTS_PER_DEG, resample_to_angular,
+)
+
+_N_FULL  = 720   # full-resolution sample count
+_N_BINS  = 361   # rfft bins for 720-point signal
+
+
+# numba kernel: fused argmax-NCC in one pass
+
+@numba.njit(parallel=True, fastmath=True, cache=True)
+def _argmax_ncc(corr, window_sum, window_sum2, L, query_energy, min_std):
+    """
+    Single-pass fused kernel that finds the best NCC offset per skyline.
+
+    Instead of many (9+) separate numpy element-wise operations over (C, 720),
+    this scans each skyline once, computing the NCC on the fly and tracking
+    the maximum.  Parallelised across skylines with numba.prange.
+
+    best_s starts at 0.0 and is updated whenever a higher NCC score is found within the valid azimuth range
+    By starting best_s at 0.0, negative NCCs are ignored - common pracitice in retrieval tasks. 
+    """
+    C, N = corr.shape
+    best_scores  = np.empty(C, dtype=np.float32)
+    best_offsets = np.empty(C, dtype=np.int32)
+
+    inv_L   = 1.0 / L
+    sqrt_Eq = math.sqrt(query_energy)
+    sqrt_L  = math.sqrt(float(L))
+    min_std2 = min_std * min_std   # compare variance instead of std
+
+    for i in numba.prange(C):
+        best_s = np.float32(0.0)
+        best_k = np.int32(0)
+
+        for k in range(N):
+            mean_k = window_sum[i, k] * inv_L
+            var_k  = window_sum2[i, k] * inv_L - mean_k * mean_k
+            if var_k < min_std2:
+                continue
+            std_k = math.sqrt(var_k)
+            ncc_k = corr[i, k] / (sqrt_Eq * sqrt_L * std_k)
+            if ncc_k > best_s:
+                best_s = np.float32(ncc_k)
+                best_k = np.int32(k)
+
+        best_scores[i]  = best_s
+        best_offsets[i] = best_k
+
+    return best_scores, best_offsets
+
+
+@numba.njit(parallel=True, fastmath=True, cache=True)
+def _argmax_ncc_az(corr, window_sum, window_sum2, L, query_energy, min_std,
+                   az_min, az_max, wrap):
+    """
+    Azimuth-constrained variant of _argmax_ncc.
+    very similar to _argmax_ncc but over different search domains. 
+        having a separate kernel is a performance and code clarity choice. 
+        spefically, unconstrained path is branch free in the inner loop, which is faster in numba. 
+
+    For each candidate row in corr, the best azimuth offset is found but only within the min to max range. 
+    By using numba njit with parallel=True, the outer loop is parallelised across candidates.
+    the azimuth gate is decided by wrap. 
+    when wrap is true, the azimuth can cross over the 720° boundary (e.g. 700° -> 60°), so valid offsets are k >= az_min OR k <= az_max
+    when wrap is false, valid offsets are k >= az_min AND k <= az_max.
+    outside this range NCC is not even computed, saving computation time
+
+    """
+    C, N = corr.shape
+    best_scores  = np.empty(C, dtype=np.float32)
+    best_offsets = np.empty(C, dtype=np.int32)
+
+    inv_L   = 1.0 / L
+    sqrt_Eq = math.sqrt(query_energy)
+    sqrt_L  = math.sqrt(float(L))
+    min_std2 = min_std * min_std
+
+    for i in numba.prange(C):
+        best_s = np.float32(0.0)
+        best_k = np.int32(0)
+
+        for k in range(N):
+            # Azimuth constraint check
+            if wrap:
+                if k < az_min and k > az_max:
+                    continue
+            else:
+                if k < az_min or k > az_max:
+                    continue
+
+            mean_k = window_sum[i, k] * inv_L
+            var_k  = window_sum2[i, k] * inv_L - mean_k * mean_k
+            if var_k < min_std2:
+                continue
+            std_k = math.sqrt(var_k)
+            ncc_k = corr[i, k] / (sqrt_Eq * sqrt_L * std_k)
+            if ncc_k > best_s:
+                best_s = np.float32(ncc_k)
+                best_k = np.int32(k)
+
+        best_scores[i]  = best_s
+        best_offsets[i] = best_k
+
+    return best_scores, best_offsets
+
+
+# helper: normalised cross-correlation via FFT
+
+def _ncc_chunk(
+    chunk_rfft: np.ndarray, # (C, 361) complex64
+    chunk_sq_rfft: np.ndarray, # (C, 361) complex64
+    query_rfft: np.ndarray, # (361,) complex64
+    query_energy: float, # sum(query_norm**2)
+    query_len: int, # non-zero samples in padded query
+    box_rfft_conj: np.ndarray, # (361,) complex64
+    az_min: int = -1, # azimuth constraint start (-1 = disabled)
+    az_max: int = -1, # azimuth constraint end (-1 = disabled)
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Compute normalised sliding cross-correlation for a chunk of references.
+
+    It takes a batch of reference skylines in frequency form and returns the best NCC score and offset for each one.  
+    it computes three inverse FFTs
+        corr: sliding correlation (query vs ref)
+        window_sum: sliding sum of reference values (for mean)
+        window_sum2: sliding sum of squared reference values (for std)
+    together they provide what is needed for NCC normalisation at each offset.
+
+    After, it delegates to a numba kernel (argmax) to scan offsets and compute normalised scores
+    If az_min/az_max are set, azimuth-constrained argmax is used.
+
+    Very low variance windows are skipped for stability. 
+    """
+    C = chunk_rfft.shape[0]
+    L = query_len
+
+    # spectral products + irfft
+    corr = scipy_irfft(
+        chunk_rfft * np.conj(query_rfft)[None, :],
+        n=_N_FULL, axis=1, workers=-1,
+    )
+
+    window_sum = scipy_irfft(
+        chunk_rfft * box_rfft_conj[None, :],
+        n=_N_FULL, axis=1, workers=-1,
+    )
+
+    window_sum2 = scipy_irfft(
+        chunk_sq_rfft * box_rfft_conj[None, :],
+        n=_N_FULL, axis=1, workers=-1,
+    )
+
+    # fused argmax-NCC (numba, parallel)
+    MIN_STD = 0.1
+    if az_min >= 0 and az_max >= 0:
+        wrap = az_min > az_max   # True when range crosses 0° (e.g. 340° -> 20°)
+        best_scores, best_offsets = _argmax_ncc_az(
+            corr, window_sum, window_sum2, L, query_energy, MIN_STD,
+            az_min, az_max, wrap,
+        )
+    else:
+        best_scores, best_offsets = _argmax_ncc(
+            corr, window_sum, window_sum2, L, query_energy, MIN_STD,
+        )
+
+    return best_scores, best_offsets
+
+
+# main search function
+
+def fft_segment_search(
+    query_segment: np.ndarray,
+    estimated_fov: float = 65.0,
+    top_k: int = 500,
+    chunk_size: int = 100_000,
+    azimuth: Optional[float] = None,
+    az_tolerance: float = 30.0,
+    rfft_data: Optional[np.ndarray] = None,
+    sq_rfft_data: Optional[np.ndarray] = None,
+    metadata: Optional[np.ndarray] = None,
+    skylines: Optional[np.ndarray] = None,
+    verbose: bool = True,
+    progress_callback: Optional[Callable[[str], None]] = None,
+) -> List[Dict]:
+    """
+    Run the coarse search stage over the full skyline database.
+
+    This function is the front recall end of the search pipeline. 
+    Given a query skyline segment and an estimated horizontal FOV, it actually performs the 
+    FFT-based sliding NCC against every database skyline, keeping the top-K matches, 
+    and returns a de-duplicated shortlist for later refinement.
+
+    overview:
+      1) Convert the query to angular sampling (2 points/degree), zero-mean it,
+         and compute a single padded RFFT
+      2) Process the database in chunks to bound memory use - using 100,000 per chunk gives 14 chunks. 
+      3) For each chunk, compute NCC statistics in the frequency domain and
+         use a fused numba argmax kernel to get best score/offset per skyline.
+      4) Merge chunk outputs, select a larger raw top set, then de-duplicate so nearby grid points 
+      do not dominate the shortlist.
+
+    Args:
+        query_segment:
+            1-D skyline profile. Can be any length (will be resampled to the
+            expected angular length from estimated_fov) or already angular.
+        estimated_fov:
+            Horizontal FOV in degrees used to derive query length and alignment
+            window size.
+        top_k:
+            Number of coarse candidates to return after de-duplication.
+        chunk_size:
+            Number of skylines evaluated per chunk. Larger values reduce Python
+            loop overhead but use more RAM.
+        azimuth:
+            Optional compass bearing in degrees (0 = North, clockwise). When
+            provided, only offsets near this bearing are considered.
+        az_tolerance:
+            Half-width (degrees) of the azimuth gate around azimuth.
+        rfft_data:
+            Optional preloaded skyline RFFT array (N, 361). Pass from caller to
+            avoid repeated disk/mmap setup.
+        sq_rfft_data:
+            Optional preloaded squared-signal RFFT array (N, 361) used for NCC
+            window variance normalisation.
+        metadata:
+            Optional preloaded metadata array (N, 3) with lat/lon/elevation.
+        skylines:
+            Reserved preloaded raw skylines array (kept for API compatibility;
+            not required by this function's current implementation).
+        verbose:
+            If True, print progress lines.
+        progress_callback:
+            Optional callback receiving the same progress messages.
+
+    Returns:
+        List of result dicts sorted by descending coarse score. Each dict has:
+            - index: database row index
+            - score: best NCC score found for that skyline
+            - azimuth_offset_deg: best left-edge offset in degrees
+            - lat, lon, elevation: metadata for downstream refinement
+
+    Notes:
+        - This stage prioritises speed and candidate recall, not final ranking
+          precision. Later stages re-score with more computationally heavy metrics.
+        - Flat queries (near-zero energy) are rejected early.
+        - Azimuth gating can significantly reduce both runtime and false
+          positives when heading information is available.
+    """
+    # load precomputed data
+    def _emit(msg: str) -> None:
+        if verbose:
+            print(msg)
+        if progress_callback is not None:
+            progress_callback(msg)
+
+    if rfft_data is None:
+        _emit("  Loading precomputed rfft ...")
+        rfft_data = load_rfft(mmap=True)
+    if sq_rfft_data is None:
+        _emit("  Loading precomputed sq_rfft ...")
+        sq_rfft_data = load_sq_rfft(mmap=True)
+    if metadata is None:
+        metadata = load_metadata(mmap=True)
+
+    N = rfft_data.shape[0]
+
+    # prepare query at full angular resolution (2 pts/degree)
+    target_len = int(estimated_fov * POINTS_PER_DEG)
+
+    if len(query_segment) != target_len:
+        query_angular = resample_to_angular(query_segment, estimated_fov)
+    else:
+        query_angular = query_segment.astype(np.float32)
+
+    # Zero-mean the query (important for NCC)
+    query_angular = query_angular - np.mean(query_angular)
+    query_energy  = float(np.sum(query_angular ** 2))
+
+    if query_energy < 1e-8:
+        _emit("  WARNING: query segment is flat - returning empty results.")
+        return []
+
+    # Zero-pad to 720 and compute rfft
+    query_padded = np.zeros(_N_FULL, dtype=np.float32)
+    query_padded[:target_len] = query_angular
+    query_rfft = np.fft.rfft(query_padded).astype(np.complex64)   # (361,)
+
+    # Precompute box kernel for window sums
+    box = np.zeros(_N_FULL, dtype=np.float32)
+    box[:target_len] = 1.0
+    box_rfft_conj = np.conj(np.fft.rfft(box).astype(np.complex64))  # (361,)
+
+    # azimuth constraint 
+    # Convert compass bearing + tolerance → offset index range.
+    _az_min = -1
+    _az_max = -1
+    if azimuth is not None:
+        half_fov = estimated_fov / 2.0
+        # Left edge of camera view in degrees
+        centre_offset_deg = (azimuth - half_fov) % 360.0
+        lo_deg = (centre_offset_deg - az_tolerance) % 360.0
+        hi_deg = (centre_offset_deg + az_tolerance) % 360.0
+        _az_min = int(lo_deg * POINTS_PER_DEG) % _N_FULL
+        _az_max = int(hi_deg * POINTS_PER_DEG) % _N_FULL
+        _emit(
+            f"  Azimuth constraint: bearing={azimuth:.0f} deg +/-{az_tolerance:.0f} deg "
+            f"-> offset range [{lo_deg:.1f} deg, {hi_deg:.1f} deg] "
+            f"(indices {_az_min}-{_az_max})"
+        )
+
+    # chunked search 
+    n_chunks = (N + chunk_size - 1) // chunk_size
+    _emit(f"  Searching {N:,} skylines in {n_chunks} chunks ...")
+
+    all_scores  = np.empty(N, dtype=np.float32)
+    all_offsets = np.empty(N, dtype=np.int32)
+
+    t0 = time.time()
+    for ci in range(n_chunks):
+        lo = ci * chunk_size
+        hi = min(lo + chunk_size, N)
+
+        chunk_rfft    = np.array(rfft_data[lo:hi])       # copy from mmap
+        chunk_sq_rfft = np.array(sq_rfft_data[lo:hi])
+
+        scores, offsets = _ncc_chunk(
+            chunk_rfft, chunk_sq_rfft, query_rfft, query_energy,
+            target_len, box_rfft_conj,
+            az_min=_az_min, az_max=_az_max,
+        )
+        all_scores[lo:hi]  = scores
+        all_offsets[lo:hi] = offsets
+
+        pct = 100 * hi / N
+        _emit(f"[Pipeline] Coarse: chunk {ci+1}/{n_chunks} ({pct:.0f}%)")
+
+    dt = time.time() - t0
+    _emit(f"  Search done in {dt:.1f}s")
+
+    # collect top-K (with geographic de-duplication) 
+    # Many top hits cluster near each other (same mountain from 250m grid points).  
+    # de-duplicate: for overlapping locations within ~2 km, keep only the highest-scoring point.  
+    # This keepss more geographically diverse candidates in shortlist
+    raw_k = min(top_k * 4, N)     # fetch extra before de-dup
+    if raw_k >= N:
+        raw_indices = np.argsort(-all_scores)
+    else:
+        raw_indices = np.argpartition(-all_scores, raw_k)[:raw_k]
+        order = np.argsort(-all_scores[raw_indices])
+        raw_indices = raw_indices[order]
+
+    DEDUP_DEG = 0.02   # ~2 km at 45° latitude
+    kept = []
+    kept_coords = []
+    for idx in raw_indices:
+        lat_i = float(metadata[idx, 0])
+        lon_i = float(metadata[idx, 1])
+        # Fast rectangular pre-filter in lat/lon space
+        too_close = False
+        for (kl, kn) in kept_coords:
+            if abs(lat_i - kl) < DEDUP_DEG and abs(lon_i - kn) < DEDUP_DEG:
+                too_close = True
+                break
+        if not too_close:
+            kept.append(idx)
+            kept_coords.append((lat_i, lon_i))
+            if len(kept) >= top_k:
+                break
+
+    results = []
+    for idx in kept:
+        offset_pts = int(all_offsets[idx])
+        results.append({
+            "index":              int(idx),
+            "score":              float(all_scores[idx]),
+            "azimuth_offset_deg": offset_pts * 0.5,   # 720 pts = 0.5°/sample
+            "lat":                float(metadata[idx, 0]),
+            "lon":                float(metadata[idx, 1]),
+            "elevation":          float(metadata[idx, 2]),
+        })
+
+    return results

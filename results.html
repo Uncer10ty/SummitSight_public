@@ -1,0 +1,78 @@
+//  Pipeline Walkthrough Animation 
+(function () {
+    const pipelineBlock = document.getElementById('pipelineBlock');
+    if (!pipelineBlock) return;
+
+    const items = pipelineBlock.querySelectorAll('.pipeline-step, .pipeline-arrow');
+
+    const observer = new IntersectionObserver(
+        (entries) => {
+            entries.forEach((entry) => {
+                if (!entry.isIntersecting) return;
+                // Animate each item with staggered delay
+                items.forEach((el) => {
+                    const delay = parseInt(el.getAttribute('data-delay') || '0', 10);
+                    setTimeout(() => el.classList.add('visible'), delay);
+                });
+                observer.unobserve(entry.target);
+            });
+        },
+        { threshold: 0.2 }
+    );
+
+    observer.observe(pipelineBlock);
+})();
+
+//  Coverage Map (Leaflet) 
+(function () {
+    const mapContainer = document.getElementById('coverageMap');
+    if (!mapContainer || typeof L === 'undefined') return;
+
+    const map = L.map(mapContainer).setView([43.0, 0.5], 7);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors',
+        maxZoom: 18,
+    }).addTo(map);
+
+    // Database coverage is represented as seven uniform tiles.
+    const tiles = [
+        [[42.0, -2.0], [43.0, -1.0]],
+        [[42.0, -1.0], [43.0, 0.0]],
+        [[42.0, 0.0], [43.0, 1.0]],
+        [[42.0, 1.0], [43.0, 2.0]],
+        [[42.0, 2.0], [43.0, 3.0]],
+        [[43.0, -2.0], [44.0, -1.0]],
+        [[43.0, -1.0], [44.0, 0.0]],
+    ];
+
+    tiles.forEach((tileBounds, index) => {
+        L.rectangle(tileBounds, {
+            color: '#2563eb',
+            weight: 2,
+            fillColor: '#3b82f6',
+            fillOpacity: 0.2,
+            dashArray: '6 4',
+        }).addTo(map).bindPopup(
+            `<strong>SummitSight Coverage Tile ${index + 1}</strong><br>` +
+            `SW: ${tileBounds[0][0].toFixed(1)}°N, ${Math.abs(tileBounds[0][1]).toFixed(1)}°${tileBounds[0][1] < 0 ? 'W' : 'E'}<br>` +
+            `NE: ${tileBounds[1][0].toFixed(1)}°N, ${Math.abs(tileBounds[1][1]).toFixed(1)}°${tileBounds[1][1] < 0 ? 'W' : 'E'}`
+        );
+    });
+
+    // Notable peaks
+    const peaks = [
+        { lat: 42.6312, lon: 0.6572, name: 'Aneto (3,404 m)', desc: 'Highest peak in the Pyrenees' },
+        { lat: 42.8434, lon: -0.4382, name: 'Pic du Midi d\'Ossau (2,884 m)', desc: 'Iconic pyramidal peak' },
+        { lat: 42.5192, lon: 2.4564, name: 'Canigou (2,784 m)', desc: 'Eastern Pyrenees summit' },
+        { lat: 42.7719, lon: 0.1444, name: 'Vignemale (3,298 m)', desc: 'Highest French Pyrenees peak' },
+    ];
+
+    peaks.forEach((p) => {
+        L.marker([p.lat, p.lon])
+            .addTo(map)
+            .bindPopup(`<strong>${p.name}</strong><br>${p.desc}`);
+    });
+
+    map.fitBounds([[42.0, -2.0], [44.0, 3.0]], { padding: [30, 30] });
+})();

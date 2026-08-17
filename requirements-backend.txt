@@ -1,0 +1,19 @@
+# SummitSight Python API – Backend dependencies
+
+Flask==3.0.0
+flask-cors==5.0.1
+gunicorn==23.0.0
+numpy==2.3.5
+opencv-contrib-python-headless==4.13.0.90
+Pillow==12.1.0
+scipy==1.17.0
+numba==0.63.1
+llvmlite==0.46.0
+matplotlib==3.10.8
+psutil==7.0.0
+torch==2.10.0+cpu
+torchvision==0.25.0+cpu
+transformers==5.0.0
+einops
+kornia
+timm
