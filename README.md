@@ -8,11 +8,7 @@ This repository contains:
 - A Python API for segmentation, search pipeline execution, and progress polling.
 - Core retrieval algorithms (coarse FFT search, geographic refine, final ranking).
 
-WARNING:  this is not an easy project to run locally. There are a lot of dependencies to install, models to load, and very large data files that are required. The computer running the project locally must have a lot of RAM or the project will probably crash when trying to load the ML models. 
-
-If you want to try out SummitSight for yourself, it is much easier to use the web-hosted version, ready made for your geolocating needs. 
-The URL is:
-www.summits.studio
+WARNING:  this is not an easy project to run locally. There are a lot of dependencies to install, models to load, and very large data files that are required. The computer running the project locally must have a lot of RAM or the project will crash when trying to load the ML models. 
 
 ## High Level Architecture
 
@@ -76,7 +72,7 @@ Runtime flow:
 - `data/skylines_sq_rfft.npy` - precomputed squared FFT for NCC normalisation.
 - `data/skylines_norm.npz` - normalisation stats.
 
-These are very large files (over 9GBs in total). 
+These are large files (over 9GBs in total). 
 Here are sharepoint links to download them:
 URL_METADATA="https://livewarwickac-my.sharepoint.com/:u:/g/personal/u5513359_live_warwick_ac_uk/IQCX0ADjOUxrSaR-OwLVl5EvASzAhKCJzerhS54De7euAUc?e=22GmPs&download=1" # metadata_250m.npy       
 URL_SKYLINES="https://livewarwickac-my.sharepoint.com/:u:/g/personal/u5513359_live_warwick_ac_uk/IQCXtHBPS8XsSam5qd17Dl3TAcQeHLpHtXTnLysQISFWfzM?e=rm8hbn&download=1" # skylines_250m.npy       
